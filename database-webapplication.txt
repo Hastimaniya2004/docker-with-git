@@ -1,0 +1,162 @@
+provider "aws" {
+  region = "ap-south-1"
+}
+
+# ---------------- VPC ----------------
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "MyVPC"
+  }
+}
+
+# ---------------- Subnets ----------------
+resource "aws_subnet" "public_subnet_1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.0.0/24"
+  availability_zone       = "ap-south-1a"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "PublicSubnet1"
+  }
+}
+
+resource "aws_subnet" "public_subnet_2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "ap-south-1b"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "PublicSubnet2"
+  }
+}
+
+# ---------------- Internet Gateway ----------------
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "MyIGW"
+  }
+}
+
+# ---------------- Route Table ----------------
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "PublicRouteTable"
+  }
+}
+
+resource "aws_route" "internet_access" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
+}
+
+resource "aws_route_table_association" "public_assoc_1" {
+  subnet_id      = aws_subnet.public_subnet_1.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_route_table_association" "public_assoc_2" {
+  subnet_id      = aws_subnet.public_subnet_2.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# ---------------- Security Groups ----------------
+
+# EC2 SG (SSH)
+resource "aws_security_group" "ec2_sg" {
+  name   = "ec2_sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # restrict later
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# RDS SG (MySQL)
+resource "aws_security_group" "rds_sg" {
+  name   = "rds_sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description = "MySQL"
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] 
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ---------------- EC2 ----------------
+resource "aws_instance" "my_server" {
+  ami           = "ami-0f559c3642608c138"
+  instance_type = "t3.micro"
+  key_name      = "WebServer"
+  subnet_id              = aws_subnet.public_subnet_1.id
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+
+  tags = {
+    Name = "Terraform-EC2"
+  }
+}
+
+# ---------------- DB Subnet Group ----------------
+resource "aws_db_subnet_group" "mydb_subnet_group" {
+  name = "mydb-subnet-group"
+
+  subnet_ids = [
+    aws_subnet.public_subnet_1.id,
+    aws_subnet.public_subnet_2.id
+  ]
+
+  tags = {
+    Name = "MyDBSubnetGroup"
+  }
+}
+
+# ---------------- RDS ----------------
+resource "aws_db_instance" "mydb" {
+  allocated_storage    = 20
+  engine               = "mysql"
+  instance_class       = "db.t3.micro"
+  db_name              = "mydatabase"
+  username             = "admin"
+  password             = "admin123"
+
+  db_subnet_group_name   = aws_db_subnet_group.mydb_subnet_group.name
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+
+  publicly_accessible = true
+  skip_final_snapshot = true
+
+  tags = {
+    Name = "MyRDS"
+  }
+}
